@@ -20,6 +20,7 @@ contract ALPFactoryTest is Test {
     IERC20 daiToken;
 
     uint256 constant LEVERAGE = 15000; // 1.5x leverage
+    uint256 constant PRECISION = 1e4;
 
     function setUp() public {
         vm.createSelectFork(vm.rpcUrl("mainnet"), 20409456);
@@ -158,5 +159,50 @@ contract ALPFactoryTest is Test {
         uint256 unsafeLeverageFactor = maxSafeLeverage + 1;
         vm.expectRevert(ALP.LeverageExceedsMaxSafe.selector);
         factory.createALP(collaterals, USDC, unsafeLeverageFactor);
+    }
+
+    function testCreateALP_ValidateLeverage() public {
+        // Test different leverage values
+        uint256[] memory leverageValues = new uint256[](3);
+        leverageValues[0] = 12000; // 1.2x leverage
+        leverageValues[1] = 15000; // 1.5x leverage
+        leverageValues[2] = 16250; // 1.625x leverage
+
+        for (uint256 i = 0; i < leverageValues.length; i++) {
+            uint256 targetLeverage = leverageValues[i];
+
+            ALPFactory.CollateralInput[] memory collaterals = new ALPFactory.CollateralInput[](2);
+            collaterals[0] = ALPFactory.CollateralInput(WETH, 1 ether);
+            collaterals[1] = ALPFactory.CollateralInput(DAI, 1000 ether);
+
+            address alpAddress = factory.createALP(collaterals, USDC, targetLeverage);
+            ALP alp = ALP(alpAddress);
+
+            (uint256 totalCollateralETH, uint256 totalDebtETH,,,, uint256 healthFactor) = alp.getDetailedPositionData();
+
+            // Calculate actual leverage
+            uint256 actualLeverage = (totalCollateralETH * PRECISION) / (totalCollateralETH - totalDebtETH);
+
+            // Check if actual leverage is close to target leverage
+            assertApproxEqRel(actualLeverage, targetLeverage, 0.01e18, "Leverage should be close to target");
+
+            // Additional checks
+            assertGt(healthFactor, 1e18, "Health factor should be above 1");
+
+            // Validate position details
+            (, address[] memory posCollateralAssets,,,) = alp.getPosition();
+
+            // Calculate and check LTV
+            uint256 currentLTV = (totalDebtETH * PRECISION) / totalCollateralETH;
+            uint256 maxLTV = alp.calculateMaxSafeLeverage(posCollateralAssets) - PRECISION;
+            assertLt(currentLTV, maxLTV, "Current LTV should be below max LTV");
+
+            console.log("Target Leverage:", targetLeverage);
+            console.log("Actual Leverage:", actualLeverage);
+            console.log("Health Factor:", healthFactor / 1e14);
+            console.log("Current LTV:", currentLTV);
+            console.log("Max LTV:", maxLTV);
+            console.log("");
+        }
     }
 }
