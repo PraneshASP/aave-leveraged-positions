@@ -47,7 +47,6 @@ contract ALPManagerTest is Test {
     }
 
     function testCreatePosition_ShouldCreatePosition() public {
-        console.log("Tests creation of a leveraged position");
         uint256 positionId = sut.createPosition(WETH, USDC, INITIAL_COLLATERAL, LEVERAGE);
         assertGt(positionId, 0, "Position not created");
 
@@ -59,5 +58,73 @@ contract ALPManagerTest is Test {
         assertEq(debtAsset, USDC, "Debt asset == USDC");
         assertGt(collateralAmount, INITIAL_COLLATERAL, "Final col. must be greater than initial");
         assertGt(debtAmount, 0, "Debt amount > 0");
+    }
+
+    function testMaxSafeLeverage_ShouldCreateSafePosition() public {
+        uint256 maxSafeLeverage = sut.calculateMaxSafeLeverage(WETH);
+        assertGt(maxSafeLeverage, 10000, "Max safe leverage > 1x");
+
+        uint256 safeLeverageFactor = maxSafeLeverage * 99 / 100; // 99% of max safe leverage
+        uint256 positionId = sut.createPosition(WETH, USDC, INITIAL_COLLATERAL, safeLeverageFactor);
+        assertGt(positionId, 0, "position should be created");
+    }
+
+    function testMaxSafeLeverage_ShouldRevertOnUnsafeLeverage() public {
+        uint256 maxSafeLeverage = sut.calculateMaxSafeLeverage(WETH);
+        uint256 unsafeLeverageFactor = maxSafeLeverage * 101 / 100; // 101% of max safe leverage
+        vm.expectRevert(ALPManager.LeverageExceedsMaxSafe.selector);
+        sut.createPosition(WETH, USDC, INITIAL_COLLATERAL, unsafeLeverageFactor);
+    }
+
+    function testGetRate_ShouldReturnValidRate() public {
+        uint256 amount = 1 ether;
+        uint256 rate = sut.getRate(WETH, USDC, amount);
+        assertGt(rate, 0, "Exchange rate should be greater than 0");
+
+        rate = sut.getRate(WETH, WETH, amount);
+        assertEq(rate, amount, "Exchange rate for same asset should be 1:1");
+    }
+
+    function testGetRate_ShouldRevertOnInvalidPriceData() public {
+        uint256 amount = 1 ether;
+        uint256[] memory prices = new uint256[](2);
+        prices[0] = 0;
+        prices[1] = 0;
+        vm.mockCall(
+            address(IPoolAddressesProvider(sut.ADDRESSES_PROVIDER()).getPriceOracle()),
+            abi.encodeWithSignature("getAssetsPrices(address[])"),
+            abi.encode(prices)
+        );
+        vm.expectRevert(ALPManager.InvalidPriceData.selector);
+        sut.getRate(WETH, USDC, amount);
+    }
+
+    function testMultipleCollaterals_ShouldCreateUniquePositions() public {
+        uint256 positionId1 = sut.createPosition(WETH, USDC, INITIAL_COLLATERAL, LEVERAGE);
+        uint256 positionId2 = sut.createPosition(DAI, USDC, 1000 * 1e18, LEVERAGE);
+
+        assertGt(positionId1, 0, "WETH position should be created");
+        assertGt(positionId2, 0, "DAI position should be created");
+        assertNotEq(positionId1, positionId2, "Position IDs should be unique");
+    }
+
+    function testInvalidLeverageFactor_ShouldRevert() public {
+        vm.expectRevert(ALPManager.InvalidLeverageFactor.selector);
+        sut.createPosition(WETH, USDC, INITIAL_COLLATERAL, 9999); // Less than 1x leverage
+    }
+
+    function testUnsupportedAssets_ShouldRevert() public {
+        address UNSUPPORTED_TOKEN = address(0x1234);
+        vm.expectRevert(ALPManager.UnsupportedCollateralAsset.selector);
+        sut.createPosition(UNSUPPORTED_TOKEN, USDC, INITIAL_COLLATERAL, 10000);
+
+        vm.expectRevert(ALPManager.UnsupportedDebtAsset.selector);
+        sut.createPosition(WETH, UNSUPPORTED_TOKEN, INITIAL_COLLATERAL, 10000);
+    }
+
+    function testGetPositionHealth_ShouldReturnValidHealthFactor() public {
+        uint256 positionId = sut.createPosition(WETH, USDC, INITIAL_COLLATERAL, LEVERAGE);
+        uint256 healthFactor = sut.getPositionHealth(positionId);
+        assertGt(healthFactor, 1e18, "Health factor should be greater than 1");
     }
 }
