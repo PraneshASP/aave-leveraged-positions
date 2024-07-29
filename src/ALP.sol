@@ -10,7 +10,7 @@ import {IUniswapV2Router} from "src/interfaces/IUniswapV2Router.sol";
 import {ReserveConfiguration} from "@aave/core-v3/contracts/protocol/libraries/configuration/ReserveConfiguration.sol";
 import {IAaveOracle} from "@aave/core-v3/contracts/interfaces/IAaveOracle.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-
+import {console} from "forge-std/console.sol";
 /// @title Aave Leveraged positions (ALP) contract
 /// @notice A contract that represents a leverged position on Aave V3 pool
 
@@ -45,7 +45,10 @@ contract ALP is ReentrancyGuard {
 
     Position public position;
 
-    // Errors
+    /*//////////////////////////////////////////////////////////////
+                                ERRORS
+    //////////////////////////////////////////////////////////////*/
+
     error InvalidLeverageFactor();
     error UnsupportedCollateralAsset();
     error UnsupportedDebtAsset();
@@ -55,6 +58,14 @@ contract ALP is ReentrancyGuard {
     error IdenticalAssets();
     error InvalidCollateralCount(); // should be max 5
 
+    error OnlyOwner();
+    error InvalidCollateralAsset();
+    error InsufficientCollateral();
+
+    /*//////////////////////////////////////////////////////////////
+                               EVENTS
+    //////////////////////////////////////////////////////////////*/
+
     /// @notice Emitted when a new leveraged position is created
     event ALPCreated(
         address indexed owner,
@@ -63,6 +74,7 @@ contract ALP is ReentrancyGuard {
         address debtAsset,
         uint256 debtAmount
     );
+    event CollateralAdded(address indexed asset, uint256 amount);
 
     /*//////////////////////////////////////////////////////////////
                             CONSTRUCTOR
@@ -120,6 +132,38 @@ contract ALP is ReentrancyGuard {
         }
 
         _createPosition(owner, _collaterals, additionalCollateral, _debtAsset, borrowAmount);
+    }
+
+    /// @notice Allows the position owner to add more collateral
+    /// @param asset Address of the collateral asset to add
+    /// @param amount Amount of collateral to add
+    function addCollateral(address asset, uint256 amount) external nonReentrant {
+        if (msg.sender != position.owner) revert OnlyOwner();
+        if (!_isValidCollateralAsset(asset)) revert InvalidCollateralAsset();
+
+        IERC20Metadata(asset).safeTransferFrom(msg.sender, address(this), amount);
+        IERC20Metadata(asset).safeIncreaseAllowance(address(POOL), amount);
+        POOL.supply(asset, amount, address(this), 0);
+
+        // Update position state
+        bool assetExists = false;
+        for (uint256 i = 0; i < position.collateralAssets.length; i++) {
+            if (position.collateralAssets[i] == asset) {
+                position.collateralAmounts[i] += amount;
+                assetExists = true;
+                break;
+            }
+        }
+
+        if (!assetExists) {
+            if (position.collateralAssets.length > 3) {
+                revert InvalidCollateralCount();
+            }
+            position.collateralAssets.push(asset);
+            position.collateralAmounts.push(amount);
+        }
+
+        emit CollateralAdded(asset, amount);
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -232,6 +276,7 @@ contract ALP is ReentrancyGuard {
     function getAssetValue(address asset, uint256 amount) public view returns (uint256) {
         return _getAssetValueInEth(asset, amount);
     }
+
     /*//////////////////////////////////////////////////////////////
                             INTERNAL METHODS
     //////////////////////////////////////////////////////////////*/
@@ -248,6 +293,7 @@ contract ALP is ReentrancyGuard {
         path[0] = _fromAsset;
         path[1] = _toAsset;
 
+        // TODO: add minOut to avoid sandwich attack
         uint256[] memory amounts =
             UNISWAP_ROUTER.swapExactTokensForTokens(_amountIn, 0, path, address(this), block.timestamp);
 
@@ -297,5 +343,13 @@ contract ALP is ReentrancyGuard {
         } catch {
             return false;
         }
+    }
+    /// @notice Checks if an asset is a valid collateral in the Aave pool
+    /// @param asset The address of the asset to check
+    /// @return bool True if the asset is a valid collateral, false otherwise
+
+    function _isValidCollateralAsset(address asset) internal view returns (bool) {
+        DataTypes.ReserveConfigurationMap memory config = POOL.getConfiguration(asset);
+        return config.getActive() && config.getReserveFactor() > 0;
     }
 }
