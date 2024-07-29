@@ -9,11 +9,12 @@ import {DataTypes} from "@aave/core-v3/contracts/protocol/libraries/types/DataTy
 import {IUniswapV2Router} from "src/interfaces/IUniswapV2Router.sol";
 import {ReserveConfiguration} from "@aave/core-v3/contracts/protocol/libraries/configuration/ReserveConfiguration.sol";
 import {IAaveOracle} from "@aave/core-v3/contracts/interfaces/IAaveOracle.sol";
+import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title Aave Leveraged positions (ALP) Manager
 /// @notice A contract for creating and managing leverged positions on Aave V3 pools
 
-contract ALPManager {
+contract ALPManager is ReentrancyGuard {
     using SafeERC20 for IERC20Metadata;
     using ReserveConfiguration for DataTypes.ReserveConfigurationMap;
 
@@ -77,7 +78,7 @@ contract ALPManager {
         address _debtAsset,
         uint256 _collateralAmount,
         uint256 _leverageFactor
-    ) external returns (uint256 positionId) {
+    ) external nonReentrant returns (uint256 positionId) {
         if (_leverageFactor < PRECISION) revert InvalidLeverageFactor();
         if (!_validateAssetInPool(_collateralAsset)) revert UnsupportedCollateralAsset();
         if (!_validateAssetInPool(_debtAsset)) revert UnsupportedDebtAsset();
