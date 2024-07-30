@@ -58,10 +58,12 @@ contract ALPFactory {
         return alp;
     }
 
+    /// @notice Returns the owner of the ALP
     function getALPOwner(address _alp) external view returns (address) {
         return alpToOwner[_alp];
     }
 
+    /// @notice Returns the ALPs owned by given wallet
     function getUserALPs(address _user) external view returns (address[] memory) {
         return userALPs[_user];
     }
