@@ -45,7 +45,7 @@ contract ALPFactoryTest is Test {
         collaterals[0] = ALPFactory.CollateralInput(WETH, 1 ether);
         collaterals[1] = ALPFactory.CollateralInput(DAI, 1000 ether);
 
-        address alp = factory.createALP(collaterals, USDC, LEVERAGE);
+        address alp = factory.createALP(collaterals, USDC, LEVERAGE, false);
         assertNotEq(alp, address(0), "ALP not created");
 
         assertEq(factory.getALPOwner(alp), address(this), "ALP owner == address(this)");
@@ -79,8 +79,8 @@ contract ALPFactoryTest is Test {
         ALPFactory.CollateralInput[] memory collaterals2 = new ALPFactory.CollateralInput[](1);
         collaterals2[0] = ALPFactory.CollateralInput(DAI, 1000 ether);
 
-        address alp1 = factory.createALP(collaterals1, USDC, LEVERAGE);
-        address alp2 = factory.createALP(collaterals2, USDC, LEVERAGE);
+        address alp1 = factory.createALP(collaterals1, USDC, LEVERAGE, false);
+        address alp2 = factory.createALP(collaterals2, USDC, LEVERAGE, false);
 
         assertNotEq(alp1, alp2, "ALPs should be different");
 
@@ -95,7 +95,7 @@ contract ALPFactoryTest is Test {
         collaterals[0] = ALPFactory.CollateralInput(WETH, 1 ether);
         collaterals[1] = ALPFactory.CollateralInput(DAI, 1000 ether);
 
-        address alp = factory.createALP(collaterals, USDC, LEVERAGE);
+        address alp = factory.createALP(collaterals, USDC, LEVERAGE, false);
 
         (
             uint256 totalCollateralETH,
@@ -120,7 +120,7 @@ contract ALPFactoryTest is Test {
         ALPFactory.CollateralInput[] memory collaterals = new ALPFactory.CollateralInput[](1);
         collaterals[0] = ALPFactory.CollateralInput(WETH, 1 ether);
 
-        factory.createALP(collaterals, USDC, 9999); // Less than 1x leverage
+        factory.createALP(collaterals, USDC, 9999, false); // Less than 1x leverage
     }
 
     // Since the default error code will be `Create2FailedDeployment()` adding a generic revert
@@ -131,7 +131,7 @@ contract ALPFactoryTest is Test {
         address UNSUPPORTED_TOKEN = address(0x1234);
         collaterals[0] = ALPFactory.CollateralInput(UNSUPPORTED_TOKEN, 1 ether);
         vm.expectRevert(ALP.UnsupportedCollateralAsset.selector);
-        factory.createALP(collaterals, USDC, 10000);
+        factory.createALP(collaterals, USDC, 10000, false);
     }
 
     function testFail_UnsupportedDebtAsset() public {
@@ -141,7 +141,7 @@ contract ALPFactoryTest is Test {
 
         collaterals[0] = ALPFactory.CollateralInput(WETH, 1 ether);
         vm.expectRevert(ALP.UnsupportedDebtAsset.selector);
-        factory.createALP(collaterals, UNSUPPORTED_TOKEN, 10000);
+        factory.createALP(collaterals, UNSUPPORTED_TOKEN, 10000, false);
     }
 
     function testFail_MaxSafeLeverage() public {
@@ -149,7 +149,7 @@ contract ALPFactoryTest is Test {
         collaterals[0] = ALPFactory.CollateralInput(WETH, 1 ether);
         collaterals[1] = ALPFactory.CollateralInput(DAI, 1000 ether);
 
-        address alp = factory.createALP(collaterals, USDC, LEVERAGE);
+        address alp = factory.createALP(collaterals, USDC, LEVERAGE, false);
 
         address[] memory assets = new address[](2);
         assets[0] = WETH;
@@ -158,7 +158,7 @@ contract ALPFactoryTest is Test {
 
         uint256 unsafeLeverageFactor = maxSafeLeverage + 1;
         vm.expectRevert(ALP.LeverageExceedsMaxSafe.selector);
-        factory.createALP(collaterals, USDC, unsafeLeverageFactor);
+        factory.createALP(collaterals, USDC, unsafeLeverageFactor, false);
     }
 
     function testCreateALP_ValidateLeverage() public {
@@ -175,7 +175,7 @@ contract ALPFactoryTest is Test {
             collaterals[0] = ALPFactory.CollateralInput(WETH, 1 ether);
             collaterals[1] = ALPFactory.CollateralInput(DAI, 1000 ether);
 
-            address alpAddress = factory.createALP(collaterals, USDC, targetLeverage);
+            address alpAddress = factory.createALP(collaterals, USDC, targetLeverage, false);
             ALP alp = ALP(alpAddress);
 
             (uint256 totalCollateralETH, uint256 totalDebtETH,,,, uint256 healthFactor) = alp.getDetailedPositionData();

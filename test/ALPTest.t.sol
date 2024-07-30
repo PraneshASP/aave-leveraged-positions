@@ -41,7 +41,7 @@ contract ALPForkTest is Test {
         ALPFactory.CollateralInput[] memory collaterals = new ALPFactory.CollateralInput[](1);
         collaterals[0] = ALPFactory.CollateralInput({asset: WETH, amount: INITIAL_COLLATERAL});
 
-        address alpAddress = factory.createALP(collaterals, USDC, LEVERAGE_FACTOR);
+        address alpAddress = factory.createALP(collaterals, USDC, LEVERAGE_FACTOR, false);
         alp = ALP(alpAddress);
 
         vm.stopPrank();
