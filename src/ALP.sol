@@ -57,10 +57,10 @@ contract ALP is ReentrancyGuard {
     error InvalidPriceData();
     error IdenticalAssets();
     error InvalidCollateralCount(); // should be max 5
-
     error OnlyOwner();
     error InvalidCollateralAsset();
     error InsufficientCollateral();
+    error ExcessRepayment();
 
     /*//////////////////////////////////////////////////////////////
                                EVENTS
@@ -75,6 +75,7 @@ contract ALP is ReentrancyGuard {
         uint256 debtAmount
     );
     event CollateralAdded(address indexed asset, uint256 amount);
+    event DebtRepaid(uint256 amount);
 
     /*//////////////////////////////////////////////////////////////
                             CONSTRUCTOR
@@ -164,6 +165,21 @@ contract ALP is ReentrancyGuard {
         }
 
         emit CollateralAdded(asset, amount);
+    }
+
+    /// @notice Allows the position owner to repay part of the debt
+    /// @param amount The amount of debt to repay
+    function repayDebt(uint256 amount) external nonReentrant {
+        if (msg.sender != position.owner) revert OnlyOwner();
+        if (amount > position.debtAmount) revert ExcessRepayment();
+
+        IERC20Metadata(position.debtAsset).safeTransferFrom(msg.sender, address(this), amount);
+        IERC20Metadata(position.debtAsset).safeIncreaseAllowance(address(POOL), amount);
+        POOL.repay(position.debtAsset, amount, 2, address(this));
+
+        position.debtAmount -= amount;
+
+        emit DebtRepaid(amount);
     }
 
     /*//////////////////////////////////////////////////////////////

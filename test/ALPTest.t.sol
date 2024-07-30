@@ -124,4 +124,65 @@ contract ALPForkTest is Test {
 
         vm.stopPrank();
     }
+
+    function test_repayDebt() public {
+        vm.startPrank(user);
+
+        (,,, address debtAsset, uint256 initialDebtAmount) = alp.getPosition();
+
+        uint256 repaymentAmount = initialDebtAmount / 2;
+
+        deal(USDC, user, repaymentAmount);
+        IERC20(USDC).approve(address(alp), repaymentAmount);
+
+        // Get initial balances and position data
+        uint256 userBalanceBefore = IERC20(USDC).balanceOf(user);
+        (uint256 totalCollateralETHBefore, uint256 totalDebtETHBefore,,,,) = alp.getDetailedPositionData();
+
+        // Repay debt
+        alp.repayDebt(repaymentAmount);
+
+        uint256 userBalanceAfter = IERC20(USDC).balanceOf(user);
+        (uint256 totalCollateralETHAfter, uint256 totalDebtETHAfter,,,,) = alp.getDetailedPositionData();
+        (,,, address finalDebtAsset, uint256 finalDebtAmount) = alp.getPosition();
+
+        assertEq(
+            userBalanceBefore - userBalanceAfter, repaymentAmount, "User balance should decrease by repayment amount"
+        );
+        assertEq(
+            initialDebtAmount - finalDebtAmount, repaymentAmount, "Debt amount should decrease by repayment amount"
+        );
+        assertEq(totalCollateralETHBefore, totalCollateralETHAfter, "Total collateral should not change");
+        assertLt(totalDebtETHAfter, totalDebtETHBefore, "Total debt should decrease");
+
+        vm.stopPrank();
+    }
+
+    function testRepayDebt_ExcessiveRepayment() public {
+        vm.startPrank(user);
+
+        (,,,, uint256 debtAmount) = alp.getPosition();
+        uint256 excessiveRepaymentAmount = debtAmount + 1 ether;
+
+        deal(USDC, user, excessiveRepaymentAmount);
+        IERC20(USDC).approve(address(alp), excessiveRepaymentAmount);
+
+        vm.expectRevert(ALP.ExcessRepayment.selector);
+        alp.repayDebt(excessiveRepaymentAmount);
+
+        vm.stopPrank();
+    }
+
+    function testRepayDebt_NotOwner() public {
+        address notOwner = address(0x456);
+        vm.startPrank(notOwner);
+
+        (,,,, uint256 debtAmount) = alp.getPosition();
+        uint256 repaymentAmount = debtAmount / 2;
+
+        vm.expectRevert(ALP.OnlyOwner.selector);
+        alp.repayDebt(repaymentAmount);
+
+        vm.stopPrank();
+    }
 }
