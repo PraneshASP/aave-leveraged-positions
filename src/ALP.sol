@@ -10,9 +10,10 @@ import {IUniswapV2Router} from "src/interfaces/IUniswapV2Router.sol";
 import {ReserveConfiguration} from "@aave/core-v3/contracts/protocol/libraries/configuration/ReserveConfiguration.sol";
 import {IAaveOracle} from "@aave/core-v3/contracts/interfaces/IAaveOracle.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
+import {console} from "forge-std/console.sol";
 
 /// @title Aave Leveraged positions (ALP) contract
-/// @notice A contract that represents a leverged position on Aave V3 pool
+/// @notice A contract that helps manage a leverged position on Aave V3 pool
 
 contract ALP is ReentrancyGuard {
     using SafeERC20 for IERC20Metadata;
@@ -24,8 +25,6 @@ contract ALP is ReentrancyGuard {
     IPool public immutable POOL;
 
     IUniswapV2Router public immutable UNISWAP_ROUTER = IUniswapV2Router(0x7a250d5630B4cF539739dF2C5dAcb4c659F2488D);
-
-    address constant USDC = 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48;
 
     uint256 private constant PRECISION = 1e4;
 
@@ -44,6 +43,9 @@ contract ALP is ReentrancyGuard {
     }
 
     Position public position;
+    bool public immutable isDegenPosition; // allows users to create single collateral high leverage positions
+
+    uint256 internal constant MAX_LOOP_COUNT = 10;
 
     /*//////////////////////////////////////////////////////////////
                                 ERRORS
@@ -61,6 +63,7 @@ contract ALP is ReentrancyGuard {
     error InvalidCollateralAsset();
     error InsufficientCollateral();
     error ExcessRepayment();
+    error ExceededMaxLoops();
 
     /*//////////////////////////////////////////////////////////////
                                EVENTS
@@ -82,58 +85,24 @@ contract ALP is ReentrancyGuard {
                             CONSTRUCTOR
     //////////////////////////////////////////////////////////////*/
 
-    constructor(address owner, CollateralInput[] memory _collaterals, address _debtAsset, uint256 _leverageFactor) {
-        if (_collaterals.length > 5) revert InvalidCollateralCount();
+    constructor(
+        address owner,
+        CollateralInput[] memory _collaterals,
+        address _debtAsset,
+        uint256 _leverageFactor,
+        bool degenMode
+    ) {
+        if (degenMode && _collaterals.length != 1) revert InvalidCollateralCount();
+        if (!degenMode && _collaterals.length > 5) revert InvalidCollateralCount();
         if (_leverageFactor < PRECISION) revert InvalidLeverageFactor();
         POOL = IPool(ADDRESSES_PROVIDER.getPool());
+        isDegenPosition = degenMode;
         if (!_validateAssetInPool(_debtAsset)) revert UnsupportedDebtAsset();
-
-        uint256 totalCollateralValueUSD = 0;
-        uint256 totalBorrowCapacityUSD = 0;
-
-        address[] memory collateralAssets = new address[](_collaterals.length);
-        for (uint256 i = 0; i < _collaterals.length; i++) {
-            collateralAssets[i] = _collaterals[i].asset;
+        if (isDegenPosition) {
+            _createSingleCollateralHighLeveragePosition(owner, _collaterals[0], _debtAsset, _leverageFactor);
+        } else {
+            _createMultiCollateralSafePosition(owner, _collaterals, _debtAsset, _leverageFactor);
         }
-        uint256 maxSafeLeverage = calculateMaxSafeLeverage(collateralAssets);
-        if (_leverageFactor > maxSafeLeverage) revert LeverageExceedsMaxSafe();
-
-        for (uint256 i = 0; i < _collaterals.length; i++) {
-            if (!_validateAssetInPool(_collaterals[i].asset)) revert UnsupportedCollateralAsset();
-
-            uint256 collateralValueUSD = _getAssetValueInUsd(_collaterals[i].asset, _collaterals[i].amount);
-            totalCollateralValueUSD += collateralValueUSD;
-
-            uint256 ltv = POOL.getConfiguration(_collaterals[i].asset).getLtv();
-            totalBorrowCapacityUSD += (collateralValueUSD * ltv) / PRECISION;
-
-            IERC20Metadata(_collaterals[i].asset).safeTransferFrom(msg.sender, address(this), _collaterals[i].amount);
-            IERC20Metadata(_collaterals[i].asset).safeIncreaseAllowance(address(POOL), _collaterals[i].amount);
-            POOL.supply(_collaterals[i].asset, _collaterals[i].amount, address(this), 0);
-        }
-
-        uint256 borrowValueUSD = (totalCollateralValueUSD * (_leverageFactor - PRECISION)) / PRECISION;
-        if (borrowValueUSD > totalBorrowCapacityUSD) revert LeverageExceedsMaxSafe();
-
-        uint256 borrowAmount = _convertUsdToAsset(_debtAsset, borrowValueUSD);
-        POOL.borrow(_debtAsset, borrowAmount, 2, 0, address(this));
-
-        uint256[] memory additionalCollateral = new uint256[](_collaterals.length);
-        {
-            for (uint256 i = 0; i < _collaterals.length; i++) {
-                if (_debtAsset == _collaterals[i].asset) revert IdenticalAssets();
-                uint256 swapValueUSD = (
-                    borrowValueUSD * _getAssetValueInUsd(_collaterals[i].asset, _collaterals[i].amount)
-                ) / totalCollateralValueUSD;
-                uint256 swapAmount = _convertUsdToAsset(_debtAsset, swapValueUSD);
-                additionalCollateral[i] = _swapAssetsUniswap(_debtAsset, _collaterals[i].asset, swapAmount);
-
-                IERC20Metadata(_collaterals[i].asset).safeIncreaseAllowance(address(POOL), additionalCollateral[i]);
-                POOL.supply(_collaterals[i].asset, additionalCollateral[i], address(this), 0);
-            }
-        }
-
-        _createPosition(owner, _collaterals, additionalCollateral, _debtAsset, borrowAmount);
     }
 
     /// @notice Allows the position owner to add more collateral
@@ -304,6 +273,138 @@ contract ALP is ReentrancyGuard {
     /*//////////////////////////////////////////////////////////////
                             INTERNAL METHODS
     //////////////////////////////////////////////////////////////*/
+
+    function _createMultiCollateralSafePosition(
+        address owner,
+        CollateralInput[] memory _collaterals,
+        address _debtAsset,
+        uint256 _leverageFactor
+    ) internal {
+        uint256 totalCollateralValueUSD = 0;
+        uint256 totalBorrowCapacityUSD = 0;
+
+        address[] memory collateralAssets = new address[](_collaterals.length);
+        for (uint256 i = 0; i < _collaterals.length; i++) {
+            collateralAssets[i] = _collaterals[i].asset;
+        }
+        uint256 maxSafeLeverage = calculateMaxSafeLeverage(collateralAssets);
+        if (_leverageFactor > maxSafeLeverage) revert LeverageExceedsMaxSafe();
+
+        for (uint256 i = 0; i < _collaterals.length; i++) {
+            if (!_validateAssetInPool(_collaterals[i].asset)) revert UnsupportedCollateralAsset();
+
+            uint256 collateralValueUSD = _getAssetValueInUsd(_collaterals[i].asset, _collaterals[i].amount);
+            totalCollateralValueUSD += collateralValueUSD;
+
+            uint256 ltv = POOL.getConfiguration(_collaterals[i].asset).getLtv();
+            totalBorrowCapacityUSD += (collateralValueUSD * ltv) / PRECISION;
+
+            IERC20Metadata(_collaterals[i].asset).safeTransferFrom(msg.sender, address(this), _collaterals[i].amount);
+            IERC20Metadata(_collaterals[i].asset).safeIncreaseAllowance(address(POOL), _collaterals[i].amount);
+            POOL.supply(_collaterals[i].asset, _collaterals[i].amount, address(this), 0);
+        }
+
+        uint256 borrowValueUSD = (totalCollateralValueUSD * (_leverageFactor - PRECISION)) / PRECISION;
+        if (borrowValueUSD > totalBorrowCapacityUSD) revert LeverageExceedsMaxSafe();
+
+        uint256 borrowAmount = _convertUsdToAsset(_debtAsset, borrowValueUSD);
+        POOL.borrow(_debtAsset, borrowAmount, 2, 0, address(this));
+
+        uint256[] memory additionalCollateral = new uint256[](_collaterals.length);
+        {
+            for (uint256 i = 0; i < _collaterals.length; i++) {
+                if (_debtAsset == _collaterals[i].asset) revert IdenticalAssets();
+                uint256 swapValueUSD = (
+                    borrowValueUSD * _getAssetValueInUsd(_collaterals[i].asset, _collaterals[i].amount)
+                ) / totalCollateralValueUSD;
+                uint256 swapAmount = _convertUsdToAsset(_debtAsset, swapValueUSD);
+                additionalCollateral[i] = _swapAssetsUniswap(_debtAsset, _collaterals[i].asset, swapAmount);
+
+                IERC20Metadata(_collaterals[i].asset).safeIncreaseAllowance(address(POOL), additionalCollateral[i]);
+                POOL.supply(_collaterals[i].asset, additionalCollateral[i], address(this), 0);
+            }
+        }
+
+        _createPosition(owner, _collaterals, additionalCollateral, _debtAsset, borrowAmount);
+    }
+
+    function _createSingleCollateralHighLeveragePosition(
+        address owner,
+        CollateralInput memory collateral,
+        address _debtAsset,
+        uint256 _leverageFactor
+    ) internal {
+        if (!_validateAssetInPool(collateral.asset)) revert UnsupportedCollateralAsset();
+        if (_debtAsset == collateral.asset) revert IdenticalAssets();
+
+        uint256 ltv = POOL.getConfiguration(collateral.asset).getLtv();
+        uint256 maxLeverage = PRECISION * PRECISION / (PRECISION - ltv); // 1 / (1 -v)
+        uint256 targetLeverage = _leverageFactor < maxLeverage ? _leverageFactor : maxLeverage;
+
+        uint256 totalCollateral = collateral.amount;
+        uint256 totalBorrowed = 0;
+        uint256 currentLeverage = PRECISION;
+        {
+            IERC20Metadata(collateral.asset).safeTransferFrom(msg.sender, address(this), collateral.amount);
+            IERC20Metadata(collateral.asset).safeIncreaseAllowance(address(POOL), collateral.amount);
+
+            POOL.supply(collateral.asset, collateral.amount, address(this), 0);
+        }
+        uint256 loopCount = 0;
+        while (currentLeverage < targetLeverage && loopCount < MAX_LOOP_COUNT) {
+            // Limit to 10 loops for safety
+            (uint256 totalCollateralBase, uint256 totalDebtBase, uint256 availableBorrowsBase,,,) =
+                POOL.getUserAccountData(address(this));
+
+            if (availableBorrowsBase == 0) break;
+
+            uint256 borrowAmount = _convertUsdToAsset(_debtAsset, availableBorrowsBase);
+            borrowAmount = (borrowAmount * 9500) / PRECISION;
+
+            {
+                try POOL.borrow(_debtAsset, borrowAmount, 2, 0, address(this)) {
+                    uint256 swappedCollateral = _swapAssetsUniswap(_debtAsset, collateral.asset, borrowAmount);
+
+                    IERC20Metadata(collateral.asset).safeIncreaseAllowance(address(POOL), swappedCollateral);
+                    POOL.supply(collateral.asset, swappedCollateral, address(this), 0);
+
+                    totalCollateral += swappedCollateral;
+                    totalBorrowed += borrowAmount;
+
+                    // Calculate leverage using base units
+                    (totalCollateralBase, totalDebtBase,,,,) = POOL.getUserAccountData(address(this));
+
+                    currentLeverage = (totalCollateralBase * PRECISION) / (totalCollateralBase - totalDebtBase);
+                } catch Error(string memory reason) {
+                    // console.log("Borrow failed:", reason);
+                    break;
+                } catch (bytes memory) /*lowLevelData*/ {
+                    break;
+                }
+            }
+            ++loopCount;
+        }
+        {
+            if (currentLeverage < targetLeverage) revert ExceededMaxLoops(); // revert if couldn't acheive target leverge.
+            // console.log("Loop Count:", loopCount);
+
+            // Create the position with the final values
+            address[] memory collateralAssets = new address[](1);
+            collateralAssets[0] = collateral.asset;
+
+            uint256[] memory collateralAmounts = new uint256[](1);
+            collateralAmounts[0] = totalCollateral;
+
+            position = Position({
+                owner: owner,
+                collateralAssets: collateralAssets,
+                collateralAmounts: collateralAmounts,
+                debtAsset: _debtAsset,
+                debtAmount: totalBorrowed
+            });
+            emit ALPCreated(owner, collateralAssets, collateralAmounts, _debtAsset, totalBorrowed);
+        }
+    }
 
     /// @notice Swaps assets using UniswapV2
     /// @param _fromAsset Address of the asset to swap from
