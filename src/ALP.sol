@@ -10,11 +10,10 @@ import {IUniswapV2Router} from "src/interfaces/IUniswapV2Router.sol";
 import {ReserveConfiguration} from "@aave/core-v3/contracts/protocol/libraries/configuration/ReserveConfiguration.sol";
 import {IAaveOracle} from "@aave/core-v3/contracts/interfaces/IAaveOracle.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {console} from "forge-std/console.sol";
 
 /// @title Aave Leveraged positions (ALP) contract
 /// @notice A contract that helps manage a leverged position on Aave V3 pool
-
+/// @notice UNAUDITED AND NOT SUITABLE FOR PRODUCTION USE!
 contract ALP is ReentrancyGuard {
     using SafeERC20 for IERC20Metadata;
     using ReserveConfiguration for DataTypes.ReserveConfigurationMap;
@@ -64,7 +63,9 @@ contract ALP is ReentrancyGuard {
     error InsufficientCollateral();
     error ExcessRepayment();
     error ExceededMaxLoops();
-
+    error PositionNotActive();
+    error UnhealthyPosition();
+    error CannotRepay();
     /*//////////////////////////////////////////////////////////////
                                EVENTS
     //////////////////////////////////////////////////////////////*/
@@ -80,6 +81,7 @@ contract ALP is ReentrancyGuard {
     event CollateralAdded(address indexed asset, uint256 amount);
     event DebtRepaid(uint256 amount);
     event LeverageAdjusted(uint256 newLeverageFactor);
+    event PositionClosed();
 
     /*//////////////////////////////////////////////////////////////
                             CONSTRUCTOR
@@ -150,6 +152,35 @@ contract ALP is ReentrancyGuard {
         position.debtAmount -= amount;
 
         emit DebtRepaid(amount);
+    }
+
+    /// @notice Allows the position owner to repay full debt and close the position
+    /// @dev Once the position is closed, it cannot be reused.
+    function closePosition() external nonReentrant {
+        if (msg.sender != position.owner) revert OnlyOwner();
+        if (position.owner == address(0)) revert PositionNotActive();
+
+        (uint256 totalCollateralBase, uint256 totalDebtBase,,,, uint256 healthFactor) =
+            POOL.getUserAccountData(address(this));
+
+        uint256 debtToRepay = _convertUsdToAsset(position.debtAsset, totalDebtBase);
+        IERC20Metadata(position.debtAsset).safeTransferFrom(position.owner, address(this), debtToRepay);
+        IERC20Metadata(position.debtAsset).safeIncreaseAllowance(address(POOL), debtToRepay);
+
+        uint256 repaidAmount = POOL.repay(position.debtAsset, type(uint256).max, 2, address(this));
+
+        for (uint256 i = 0; i < position.collateralAssets.length; i++) {
+            uint256 withdrawnAmount = POOL.withdraw(position.collateralAssets[i], type(uint256).max, address(this));
+
+            IERC20Metadata(position.collateralAssets[i]).safeTransfer(position.owner, withdrawnAmount);
+        }
+
+        // Final check
+        (totalCollateralBase, totalDebtBase,,,, healthFactor) = POOL.getUserAccountData(address(this));
+
+        delete position;
+
+        emit PositionClosed();
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -267,7 +298,7 @@ contract ALP is ReentrancyGuard {
         uint256 assetDecimals = IERC20Metadata(asset).decimals();
         // console.log("_convertUsdToAsset", priceInUsd, amountInUsd, (amountInUsd * (10 ** assetDecimals)) / priceInUsd);
 
-        return (amountInUsd * (10 ** assetDecimals)) / priceInUsd;
+        return ((amountInUsd * (10 ** assetDecimals)) / priceInUsd) + 1; // round-up
     }
 
     /*//////////////////////////////////////////////////////////////
@@ -418,7 +449,8 @@ contract ALP is ReentrancyGuard {
         path[0] = _fromAsset;
         path[1] = _toAsset;
 
-        // TODO: add minOut to avoid sandwich attack
+        // TODO: add minOut to avoid sandwich attack. this is just for demo purposes
+        // Better to use v3
         uint256[] memory amounts =
             UNISWAP_ROUTER.swapExactTokensForTokens(_amountIn, 0, path, address(this), block.timestamp);
 
