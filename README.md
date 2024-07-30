@@ -54,7 +54,7 @@ The concept of ALP is inspired by MakerDAO's Collateralized Debt Positions (CDPs
 > High leverage is always a risk. The ALP contract only helps create and manage positions.
 > Constant monitoring is required to avoid liquidations!
 
-## Leverage process:
+## How leveraging works?
 
 1.  **Deposit Collateral:** The user deposits an initial amount of collateral (e.g., ETH).
 
@@ -77,7 +77,7 @@ $$ L = \frac{1}{1 - v} $$
 
 This formula allows us to calculate the theoretical maximum collateral value achievable through repeated borrowing and reinvesting.
 
-*(Thanks to Bentley for his recent research paper on this topic)[^1]*
+*([Thanks to Bentley for his recent research paper on this topic](https://github.com/euler-mab/looping-and-leverage/blob/main/Looping_and_Leverage_in_Decentralised_Finance__DeFi_.pdf))[^1]*
 
 #### Example
 
@@ -153,4 +153,4 @@ sequenceDiagram
 ## Disclaimer:
 *This code is provided for educational and informational purposes only.Use at your own risk. The authors are not responsible for any losses or damages resulting from its use.*
 
-[^1]: Bentley, M. A. (2023). Looping and Leverage in Decentralised Finance (DeFi).
+[^1]: Michael A Bentley (2024). Looping and Leverage in Decentralised Finance (DeFi).
