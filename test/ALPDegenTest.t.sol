@@ -99,4 +99,71 @@ contract ALPMaxLeverageTest is Test {
 
         vm.stopPrank();
     }
+
+    function test_closePosition_Degen() public {
+        vm.startPrank(user);
+
+        ALPFactory.CollateralInput[] memory collaterals = new ALPFactory.CollateralInput[](1);
+        collaterals[0] = ALPFactory.CollateralInput({asset: WETH, amount: INITIAL_COLLATERAL});
+
+        address alpAddress = factory.createALP(collaterals, USDC, LEVERAGE_FACTOR, true);
+        alp = ALP(alpAddress);
+        // Get initial position data and user balances
+        (, address[] memory collateralAssets,, address debtAsset,) = alp.getPosition();
+
+        uint256[] memory userBalancesBefore = new uint256[](collateralAssets.length);
+        for (uint256 i = 0; i < collateralAssets.length; i++) {
+            userBalancesBefore[i] = IERC20(collateralAssets[i]).balanceOf(user);
+            console.log("Initial balance of", collateralAssets[i], ":", userBalancesBefore[i]);
+        }
+        uint256 userDebtAssetBalanceBefore = IERC20(debtAsset).balanceOf(user);
+        console.log("Initial debt asset balance:", userDebtAssetBalanceBefore);
+
+        (uint256 totalCollateralBefore, uint256 totalDebtBefore,,,,) = alp.getDetailedPositionData();
+        console.log("Total collateral before:", totalCollateralBefore);
+        console.log("Total debt before:", totalDebtBefore);
+
+        // Close the position
+        IERC20(USDC).approve(address(alp), 20000e6);
+        console.log("Approved USDC for closing position");
+
+        alp.closePosition();
+        console.log("Position closed");
+
+        // Check user balances after closing position
+        for (uint256 i = 0; i < collateralAssets.length; i++) {
+            uint256 userBalanceAfter = IERC20(collateralAssets[i]).balanceOf(user);
+            console.log("Final balance of", collateralAssets[i], ":", userBalanceAfter);
+            assertGt(userBalanceAfter, userBalancesBefore[i], "Collateral not returned");
+        }
+
+        // Check that the position is closed
+        (
+            address newOwner,
+            address[] memory newCollateralAssets,
+            uint256[] memory newCollateralAmounts,
+            address newDebtAsset,
+            uint256 newDebtAmount
+        ) = alp.getPosition();
+
+        assertEq(newOwner, address(0), "Owner not zero");
+        assertEq(newCollateralAssets.length, 0, "Collateral assets not empty");
+        assertEq(newCollateralAmounts.length, 0, "Collateral amounts not empty");
+        assertEq(newDebtAsset, address(0), "Debt asset not zero");
+        assertEq(newDebtAmount, 0, "Debt amount not zero");
+
+        // Check detailed position data
+        (uint256 totalCollateralAfter, uint256 totalDebtAfter,,,,) = alp.getDetailedPositionData();
+        console.log("Total collateral after:", totalCollateralAfter);
+        console.log("Total debt after:", totalDebtAfter);
+
+        assertEq(totalCollateralAfter, 0, "Collateral not zero");
+        assertEq(totalDebtAfter, 0, "Debt not zero");
+
+        // Verify that the debt has been repaid
+        uint256 userDebtAssetBalanceAfter = IERC20(debtAsset).balanceOf(user);
+        assertLe(userDebtAssetBalanceAfter, userDebtAssetBalanceBefore, "Debt not repaid");
+
+        vm.stopPrank();
+    }
 }
