@@ -54,15 +54,15 @@ contract ALPForkTest is Test {
         IERC20(WETH).approve(address(alp), additionalCollateral);
 
         uint256 userBalanceBefore = IERC20(WETH).balanceOf(user);
-        (uint256 totalCollateralETHBefore,,,,,) = alp.getDetailedPositionData();
+        (uint256 totalCollateralBefore,,,,,) = alp.getDetailedPositionData();
 
         alp.addCollateral(WETH, additionalCollateral);
 
         uint256 userBalanceAfter = IERC20(WETH).balanceOf(user);
-        (uint256 totalCollateralETHAfter,,,,,) = alp.getDetailedPositionData();
+        (uint256 totalCollateralAfter,,,,,) = alp.getDetailedPositionData();
 
         assertEq(userBalanceBefore - userBalanceAfter, additionalCollateral, "User balance ~ decrease");
-        assertGt(totalCollateralETHAfter, totalCollateralETHBefore, "Total collateral ~ increase");
+        assertGt(totalCollateralAfter, totalCollateralBefore, "Total collateral ~ increase");
 
         vm.stopPrank();
     }
@@ -74,15 +74,15 @@ contract ALPForkTest is Test {
         IERC20(DAI).approve(address(alp), additionalCollateral);
 
         uint256 userBalanceBefore = IERC20(DAI).balanceOf(user);
-        (uint256 totalCollateralETHBefore,,,,,) = alp.getDetailedPositionData();
+        (uint256 totalCollateralBefore,,,,,) = alp.getDetailedPositionData();
 
         alp.addCollateral(DAI, additionalCollateral);
 
         uint256 userBalanceAfter = IERC20(DAI).balanceOf(user);
-        (uint256 totalCollateralETHAfter,,,,,) = alp.getDetailedPositionData();
+        (uint256 totalCollateralAfter,,,,,) = alp.getDetailedPositionData();
 
         assertEq(userBalanceBefore - userBalanceAfter, additionalCollateral, "User balance ~ decrease");
-        assertGt(totalCollateralETHAfter, totalCollateralETHBefore, "Total collateral ~ increase");
+        assertGt(totalCollateralAfter, totalCollateralBefore, "Total collateral ~ increase");
 
         vm.stopPrank();
     }
@@ -137,13 +137,13 @@ contract ALPForkTest is Test {
 
         // Get initial balances and position data
         uint256 userBalanceBefore = IERC20(USDC).balanceOf(user);
-        (uint256 totalCollateralETHBefore, uint256 totalDebtETHBefore,,,,) = alp.getDetailedPositionData();
+        (uint256 totalCollateralBefore, uint256 totalDebtBefore,,,,) = alp.getDetailedPositionData();
 
         // Repay debt
         alp.repayDebt(repaymentAmount);
 
         uint256 userBalanceAfter = IERC20(USDC).balanceOf(user);
-        (uint256 totalCollateralETHAfter, uint256 totalDebtETHAfter,,,,) = alp.getDetailedPositionData();
+        (uint256 totalCollateralAfter, uint256 totalDebtAfter,,,,) = alp.getDetailedPositionData();
         (,,, address finalDebtAsset, uint256 finalDebtAmount) = alp.getPosition();
 
         assertEq(
@@ -152,8 +152,8 @@ contract ALPForkTest is Test {
         assertEq(
             initialDebtAmount - finalDebtAmount, repaymentAmount, "Debt amount should decrease by repayment amount"
         );
-        assertEq(totalCollateralETHBefore, totalCollateralETHAfter, "Total collateral should not change");
-        assertLt(totalDebtETHAfter, totalDebtETHBefore, "Total debt should decrease");
+        assertEq(totalCollateralBefore, totalCollateralAfter, "Total collateral should not change");
+        assertLt(totalDebtAfter, totalDebtBefore, "Total debt should decrease");
 
         vm.stopPrank();
     }

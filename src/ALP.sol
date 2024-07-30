@@ -10,7 +10,7 @@ import {IUniswapV2Router} from "src/interfaces/IUniswapV2Router.sol";
 import {ReserveConfiguration} from "@aave/core-v3/contracts/protocol/libraries/configuration/ReserveConfiguration.sol";
 import {IAaveOracle} from "@aave/core-v3/contracts/interfaces/IAaveOracle.sol";
 import {ReentrancyGuard} from "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
-import {console} from "forge-std/console.sol";
+
 /// @title Aave Leveraged positions (ALP) contract
 /// @notice A contract that represents a leverged position on Aave V3 pool
 
@@ -76,6 +76,7 @@ contract ALP is ReentrancyGuard {
     );
     event CollateralAdded(address indexed asset, uint256 amount);
     event DebtRepaid(uint256 amount);
+    event LeverageAdjusted(uint256 newLeverageFactor);
 
     /*//////////////////////////////////////////////////////////////
                             CONSTRUCTOR
@@ -87,8 +88,8 @@ contract ALP is ReentrancyGuard {
         POOL = IPool(ADDRESSES_PROVIDER.getPool());
         if (!_validateAssetInPool(_debtAsset)) revert UnsupportedDebtAsset();
 
-        uint256 totalCollateralValueInEth = 0;
-        uint256 totalBorrowCapacity = 0;
+        uint256 totalCollateralValueUSD = 0;
+        uint256 totalBorrowCapacityUSD = 0;
 
         address[] memory collateralAssets = new address[](_collaterals.length);
         for (uint256 i = 0; i < _collaterals.length; i++) {
@@ -100,31 +101,31 @@ contract ALP is ReentrancyGuard {
         for (uint256 i = 0; i < _collaterals.length; i++) {
             if (!_validateAssetInPool(_collaterals[i].asset)) revert UnsupportedCollateralAsset();
 
-            uint256 collateralValueInEth = _getAssetValueInEth(_collaterals[i].asset, _collaterals[i].amount);
-            totalCollateralValueInEth += collateralValueInEth;
+            uint256 collateralValueUSD = _getAssetValueInUsd(_collaterals[i].asset, _collaterals[i].amount);
+            totalCollateralValueUSD += collateralValueUSD;
 
             uint256 ltv = POOL.getConfiguration(_collaterals[i].asset).getLtv();
-            totalBorrowCapacity += (collateralValueInEth * ltv) / 10000;
+            totalBorrowCapacityUSD += (collateralValueUSD * ltv) / PRECISION;
 
             IERC20Metadata(_collaterals[i].asset).safeTransferFrom(msg.sender, address(this), _collaterals[i].amount);
             IERC20Metadata(_collaterals[i].asset).safeIncreaseAllowance(address(POOL), _collaterals[i].amount);
             POOL.supply(_collaterals[i].asset, _collaterals[i].amount, address(this), 0);
         }
 
-        uint256 borrowAmountInEth = (totalCollateralValueInEth * (_leverageFactor - PRECISION)) / PRECISION;
-        if (borrowAmountInEth > totalBorrowCapacity) revert LeverageExceedsMaxSafe();
+        uint256 borrowValueUSD = (totalCollateralValueUSD * (_leverageFactor - PRECISION)) / PRECISION;
+        if (borrowValueUSD > totalBorrowCapacityUSD) revert LeverageExceedsMaxSafe();
 
-        uint256 borrowAmount = _convertEthToAsset(_debtAsset, borrowAmountInEth);
+        uint256 borrowAmount = _convertUsdToAsset(_debtAsset, borrowValueUSD);
         POOL.borrow(_debtAsset, borrowAmount, 2, 0, address(this));
 
         uint256[] memory additionalCollateral = new uint256[](_collaterals.length);
         {
             for (uint256 i = 0; i < _collaterals.length; i++) {
                 if (_debtAsset == _collaterals[i].asset) revert IdenticalAssets();
-                uint256 swapAmountInEth = (
-                    borrowAmountInEth * _getAssetValueInEth(_collaterals[i].asset, _collaterals[i].amount)
-                ) / totalCollateralValueInEth;
-                uint256 swapAmount = _convertEthToAsset(_debtAsset, swapAmountInEth);
+                uint256 swapValueUSD = (
+                    borrowValueUSD * _getAssetValueInUsd(_collaterals[i].asset, _collaterals[i].amount)
+                ) / totalCollateralValueUSD;
+                uint256 swapAmount = _convertUsdToAsset(_debtAsset, swapValueUSD);
                 additionalCollateral[i] = _swapAssetsUniswap(_debtAsset, _collaterals[i].asset, swapAmount);
 
                 IERC20Metadata(_collaterals[i].asset).safeIncreaseAllowance(address(POOL), additionalCollateral[i]);
@@ -247,9 +248,9 @@ contract ALP is ReentrancyGuard {
         public
         view
         returns (
-            uint256 totalCollateralETH,
-            uint256 totalDebtETH,
-            uint256 availableBorrowsETH,
+            uint256 totalCollateral,
+            uint256 totalDebt,
+            uint256 availableBorrows,
             uint256 currentLiquidationThreshold,
             uint256 ltv,
             uint256 healthFactor
@@ -275,22 +276,29 @@ contract ALP is ReentrancyGuard {
         return PRECISION + ltvAdjusted;
     }
 
-    function _getAssetValueInEth(address asset, uint256 amount) internal view returns (uint256) {
+    /// @notice Calculates the USD value of a given amount of an asset
+    /// @param asset The address of the asset
+    /// @param amount The amount of the asset
+    /// @return The USD value of the asset amount, expressed with 8 decimal places
+    function _getAssetValueInUsd(address asset, uint256 amount) internal view returns (uint256) {
         IAaveOracle oracle = IAaveOracle(ADDRESSES_PROVIDER.getPriceOracle());
-        uint256 price = oracle.getAssetPrice(asset);
-        uint256 decimals = IERC20Metadata(asset).decimals();
-        return (amount * price) / (10 ** decimals);
+        uint256 priceInUsd = oracle.getAssetPrice(asset); // Price in USD with 8 decimals
+        uint256 assetDecimals = IERC20Metadata(asset).decimals();
+        //console.log("_getAssetValueInUsd", priceInUsd, amount, (amount * priceInUsd) / (10 ** assetDecimals));
+        return (amount * priceInUsd) / (10 ** assetDecimals);
     }
 
-    function _convertEthToAsset(address asset, uint256 amountInEth) internal view returns (uint256) {
+    /// @notice Converts a USD amount to the equivalent amount of a specific asset
+    /// @param asset The address of the asset to convert to
+    /// @param amountInUsd The amount in USD, expressed with 8 decimal places
+    /// @return The equivalent amount of the asset, expressed in the asset's native decimals
+    function _convertUsdToAsset(address asset, uint256 amountInUsd) internal view returns (uint256) {
         IAaveOracle oracle = IAaveOracle(ADDRESSES_PROVIDER.getPriceOracle());
-        uint256 price = oracle.getAssetPrice(asset);
-        uint256 decimals = IERC20Metadata(asset).decimals();
-        return (amountInEth * (10 ** decimals)) / price;
-    }
+        uint256 priceInUsd = oracle.getAssetPrice(asset); // Price in USD with 8 decimals
+        uint256 assetDecimals = IERC20Metadata(asset).decimals();
+        // console.log("_convertUsdToAsset", priceInUsd, amountInUsd, (amountInUsd * (10 ** assetDecimals)) / priceInUsd);
 
-    function getAssetValue(address asset, uint256 amount) public view returns (uint256) {
-        return _getAssetValueInEth(asset, amount);
+        return (amountInUsd * (10 ** assetDecimals)) / priceInUsd;
     }
 
     /*//////////////////////////////////////////////////////////////
