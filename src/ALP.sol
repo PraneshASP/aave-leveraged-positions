@@ -57,7 +57,7 @@ contract ALP is ReentrancyGuard {
     error PositionDoesNotExist();
     error InvalidPriceData();
     error IdenticalAssets();
-    error InvalidCollateralCount(); // should be max 5
+    error InvalidCollateralCount(bool isDegenMode);
     error OnlyOwner();
     error InvalidCollateralAsset();
     error InsufficientCollateral();
@@ -94,8 +94,8 @@ contract ALP is ReentrancyGuard {
         uint256 _leverageFactor,
         bool degenMode
     ) {
-        if (degenMode && _collaterals.length != 1) revert InvalidCollateralCount();
-        if (!degenMode && _collaterals.length > 5) revert InvalidCollateralCount();
+        if (degenMode && _collaterals.length != 1) revert InvalidCollateralCount(degenMode);
+        if (!degenMode && _collaterals.length > 5) revert InvalidCollateralCount(degenMode);
         if (_leverageFactor < PRECISION) revert InvalidLeverageFactor();
         POOL = IPool(ADDRESSES_PROVIDER.getPool());
         isDegenPosition = degenMode;
