@@ -130,7 +130,7 @@ contract ALP is ReentrancyGuard {
 
         if (!assetExists) {
             if (position.collateralAssets.length > 3) {
-                revert InvalidCollateralCount();
+                revert InvalidCollateralCount(false);
             }
             position.collateralAssets.push(asset);
             position.collateralAmounts.push(amount);
